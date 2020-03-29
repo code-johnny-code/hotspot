@@ -14,30 +14,25 @@ import {
   ToastAndroid,
   TouchableOpacity,
   View,
+  Text,
 } from 'react-native';
 import Geolocation from '@react-native-community/geolocation';
 import axios from 'axios';
 import Config from 'react-native-config';
 import moment from 'moment';
-import MapView, {Polygon, Polyline, PROVIDER_GOOGLE} from 'react-native-maps';
+import MapView, {Polygon, PROVIDER_GOOGLE} from 'react-native-maps';
 import Icon from 'react-native-vector-icons/FontAwesome';
+import AsyncStorage from '@react-native-community/async-storage';
+import {getUniqueId} from 'react-native-device-info';
+import {v4 as uuidv4} from 'uuid';
 
-const positiveReportChickenTest = userId => {
-  Alert.alert(
-    'Report a Positive COVID-19 Result?',
-    'This will result in the generation of new hotspots and notifications based on your anonymous position history. \n\n Did you in fact receive a Positive result from a COVID-19 Test?',
-    [
-      {
-        text: 'Confirm',
-        onPress: () => reportPositiveCovidTestResult(userId),
-      },
-      {
-        text: 'Cancel',
-        onPress: () => console.log('Cancel Pressed'),
-        style: 'cancel',
-      },
-    ],
-  );
+const storeData = async (key, val) => {
+  try {
+    await AsyncStorage.setItem(key, val);
+  } catch (e) {
+    console.log(e);
+    // saving error
+  }
 };
 
 const reportPosition = (position, userId) => {
@@ -66,10 +61,6 @@ const coordsToMapPolygonFormat = coords => {
   });
 };
 
-const reportPositiveCovidTestResult = userId => {
-  console.log(`USER ${userId} REPORTED A POSITIVE COVID-19 TEST RESULT`);
-};
-
 const showDetails = message => {
   ToastAndroid.show(message, ToastAndroid.LONG);
 };
@@ -81,13 +72,86 @@ class App extends Component {
       userId: '54231ae2-2f41-4fbc-bf19-849b3e355baf',
       intervalId: null,
       locations: [],
+      startingLoc: {latitude: 38.627003, longitude: -90.199402},
+      userStatus: 'clear',
     };
   }
 
   componentDidMount() {
-    this.startGeoPolling();
-    this.getMyPositionHistory().then(res => this.setState({locations: res}));
+    this.setInitialMapLocation();
+    this.getSetUserId().then(() => {
+      this.startGeoPolling();
+      this.getMyPositionHistory().then(res => this.setState({locations: res}));
+    });
   }
+
+  positiveReportChickenTest = () => {
+    Alert.alert(
+      'Report a Positive COVID-19 Result?',
+      'This will result in the generation of new hotspots and notifications based on your anonymous position history. \n\n Did you in fact receive a Positive result from a COVID-19 Test?',
+      [
+        {
+          text: 'Confirm',
+          onPress: () => this.reportPositiveCovidTestResult(this.state.userId),
+        },
+        {
+          text: 'Cancel',
+          onPress: () => console.log('Cancel Pressed'),
+          style: 'cancel',
+        },
+      ],
+    );
+  };
+
+  reportPositiveCovidTestResult = () => {
+    const payload = {
+      userId: this.state.userId,
+      key: Config.API_KEY,
+      timestamp: moment().valueOf(),
+    };
+    axios.post(Config.API_REPORT_POSITIVE, payload).then(() => {
+      this.setState({userStatus: 'positive'});
+    });
+  };
+
+  setInitialMapLocation = () => {
+    Geolocation.getCurrentPosition(
+      res => {
+        const crd = res.coords;
+        this.setState({
+          startingLoc: {latitude: crd.latitude, longitude: crd.longitude},
+        });
+      },
+      () => {
+        Alert.alert('Location Error', 'Unable to determine current location');
+      },
+      {enableHighAccuracy: true, timeout: 20000, maximumAge: 10000},
+    );
+  };
+
+  getSetUserId = async () => {
+    try {
+      const value = await AsyncStorage.getItem('@HOTSPOT_USERID');
+      if (value !== null) {
+        return this.setState({userId: value});
+      }
+      const userId = uuidv4();
+      const deviceId = getUniqueId();
+      const payload = {
+        userId,
+        deviceId,
+        key: Config.API_KEY,
+      };
+      axios.post(Config.API_REGISTER_URL, payload).then(res => {
+        if (Object.keys(res.data).length) {
+          this.setState({userId: userId});
+          storeData('@HOTSPOT_USERID', userId);
+        }
+      });
+    } catch (e) {
+      // error reading value
+    }
+  };
 
   getMyPositionHistory = () => {
     const payload = {
@@ -99,6 +163,7 @@ class App extends Component {
       .then(function(response) {
         return response.data.map(position => {
           return {
+            h3: position.h3,
             coordinates: coordsToMapPolygonFormat(position.h3_geom),
             timestamp: moment(position.timestamp).format(
               'dddd, MMMM Do YYYY, h:mm:ss a',
@@ -114,13 +179,19 @@ class App extends Component {
   };
 
   reportCurrentPosition = () => {
-    Geolocation.getCurrentPosition(
-      position => {
-        reportPosition(position, this.state.userId);
-      },
-      error => Alert.alert('Error', JSON.stringify(error)),
-      {enableHighAccuracy: true, timeout: 20000, maximumAge: 1000},
-    );
+    if (this.state.userId) {
+      Geolocation.getCurrentPosition(
+        position => {
+          reportPosition(position, this.state.userId).then(() => {
+            this.getMyPositionHistory().then(res =>
+              this.setState({locations: res}),
+            );
+          });
+        },
+        error => Alert.alert('Error', JSON.stringify(error)),
+        {enableHighAccuracy: true, timeout: 20000, maximumAge: 1000},
+      );
+    }
   };
 
   startGeoPolling = () => {
@@ -135,16 +206,60 @@ class App extends Component {
     }
   };
 
+  userStatusIcon = () => {
+    if (this.state.userStatus === 'clear') {
+      return 'check';
+    }
+    if (this.state.userStatus === 'exposed') {
+      return 'warning';
+    }
+    if (this.state.userStatus === 'positive') {
+      return 'exclamation-triangle';
+    }
+  };
+
+  userStatusColor = () => {
+    if (this.state.userStatus === 'clear') {
+      return 'green';
+    }
+    if (this.state.userStatus === 'exposed') {
+      return 'orange';
+    }
+    if (this.state.userStatus === 'positive') {
+      return 'red';
+    }
+  };
+
+  userStatusText = () => {
+    if (this.state.userStatus === 'clear') {
+      return 'Data does not indicate any exposure.';
+    }
+    if (this.state.userStatus === 'exposed') {
+      return 'Data indicates that you may have been exposed based on your recent activity. Please take extra precautions.';
+    }
+    if (this.state.userStatus === 'positive') {
+      return 'You have anonymously reported that you tested positive for COVID-19. Please take all appropriate precautions to limit exposure to others.';
+    }
+  };
+
   render() {
     return (
       <SafeAreaView style={styles.container}>
         <MapView
           provider={PROVIDER_GOOGLE} // remove if not using Google Maps
           style={styles.map}
-          showsMyLocationButton={true}>
+          showsUserLocation={true}
+          showsMyLocationButton={true}
+          initialRegion={{
+            latitude: this.state.startingLoc.latitude,
+            longitude: this.state.startingLoc.longitude,
+            latitudeDelta: 0.015,
+            longitudeDelta: 0.0121,
+          }}>
           {this.state.locations.map(loc => {
             return (
               <Polygon
+                key={loc.timestamp}
                 coordinates={loc.coordinates}
                 tappable={true}
                 onPress={() => showDetails(loc.timestamp)}
@@ -153,14 +268,35 @@ class App extends Component {
           })}
         </MapView>
         <View style={styles.buttonPanel}>
+          {this.state.userStatus === 'positive' ? null : (
+            <TouchableOpacity
+              style={styles.button}
+              onPress={() => this.positiveReportChickenTest()}>
+              <Icon name="bullhorn" size={40} color="white" />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
-            style={styles.button}
-            onPress={() => positiveReportChickenTest(this.state.userId)}>
-            <Icon name="bullhorn" size={40} color="white" />
+            style={{
+              ...styles.statusButton,
+              backgroundColor: this.userStatusColor(),
+            }}
+            onPress={() => showDetails(this.userStatusText())}>
+            <Icon name={this.userStatusIcon()} size={40} color="white" />
           </TouchableOpacity>
-          <TouchableOpacity style={styles.button} onPress={() => null}>
-            <Icon name="history" size={40} color="white" />
-          </TouchableOpacity>
+        </View>
+        <View
+          style={{
+            ...styles.statusBarTop,
+            backgroundColor: this.userStatusColor(),
+          }}>
+          <Text style={{color: 'white'}}>{this.state.userStatus}</Text>
+        </View>
+        <View
+          style={{
+            ...styles.statusBarBottom,
+            backgroundColor: this.userStatusColor(),
+          }}>
+          <Text style={{color: 'white'}}>{this.state.userStatus}</Text>
         </View>
       </SafeAreaView>
     );
@@ -185,14 +321,35 @@ const styles = StyleSheet.create({
     borderRadius: 50,
     justifyContent: 'center',
     alignItems: 'center',
-    color: 'purple',
     backgroundColor: '#00aadf',
+  },
+  statusButton: {
+    height: 60,
+    width: 60,
+    margin: 10,
+    borderRadius: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statusBarTop: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    position: 'absolute',
+    top: 0,
+  },
+  statusBarBottom: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    position: 'absolute',
+    bottom: 0,
   },
   buttonPanel: {
     flexDirection: 'row',
     justifyContent: 'center',
     position: 'absolute',
-    bottom: 10,
+    bottom: 12,
   },
 });
 
