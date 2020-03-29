@@ -227,9 +227,17 @@ class App extends Component {
     axios.get(Config.API_HOTSPOTS_URL, payload).then(res => {
       const hotspots = res.data.map(spot => {
         return {
+          h3: spot.h3,
           coordinates: coordsToMapPolygonFormat(spot.geometry),
           timestamp: spot.timestamp,
         };
+      });
+      const positionHistoryH3s = this.state.locations.map(loc => loc.h3);
+      hotspots.forEach(spot => {
+        if (positionHistoryH3s.includes(spot.h3)) {
+          this.setState({userStatus: 'exposed'});
+          storeData('@HOTSPOT_STATUS', 'exposed');
+        }
       });
       this.setState({activeHotspots: hotspots});
     });
@@ -317,7 +325,7 @@ class App extends Component {
           {this.state.locations.map(loc => {
             return (
               <Polygon
-                key={loc.timestamp}
+                key={loc.timestamp + this.state.userId}
                 coordinates={loc.coordinates}
                 tappable={true}
                 onPress={() => showDetails(loc.timestamp)}
