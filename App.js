@@ -8,17 +8,18 @@
 
 import React, {Component} from 'react';
 import {
+  Alert,
   SafeAreaView,
   StyleSheet,
-  Alert,
-  View,
+  ToastAndroid,
   TouchableOpacity,
+  View,
 } from 'react-native';
 import Geolocation from '@react-native-community/geolocation';
 import axios from 'axios';
 import Config from 'react-native-config';
 import moment from 'moment';
-import MapView, {PROVIDER_GOOGLE} from 'react-native-maps';
+import MapView, {Polygon, Polyline, PROVIDER_GOOGLE} from 'react-native-maps';
 import Icon from 'react-native-vector-icons/FontAwesome';
 
 const positiveReportChickenTest = userId => {
@@ -56,8 +57,21 @@ const reportPosition = (position, userId) => {
     });
 };
 
+const coordsToMapPolygonFormat = coords => {
+  return coords.map(coordPair => {
+    return {
+      latitude: coordPair[1],
+      longitude: coordPair[0],
+    };
+  });
+};
+
 const reportPositiveCovidTestResult = userId => {
   console.log(`USER ${userId} REPORTED A POSITIVE COVID-19 TEST RESULT`);
+};
+
+const showDetails = message => {
+  ToastAndroid.show(message, ToastAndroid.LONG);
 };
 
 class App extends Component {
@@ -66,24 +80,31 @@ class App extends Component {
     this.state = {
       userId: '54231ae2-2f41-4fbc-bf19-849b3e355baf',
       intervalId: null,
+      locations: [],
     };
   }
 
   componentDidMount() {
     this.startGeoPolling();
-    this.getMyPositionHistory();
+    this.getMyPositionHistory().then(res => this.setState({locations: res}));
   }
 
-  getMyPositionHistory = userId => {
+  getMyPositionHistory = () => {
     const payload = {
-      userId: userId,
+      userId: this.state.userId,
       key: Config.API_KEY,
     };
     return axios
       .post(Config.API_USER_POSITIONS, payload)
       .then(function(response) {
-        console.log(response);
-        return response;
+        return response.data.map(position => {
+          return {
+            coordinates: coordsToMapPolygonFormat(position.h3_geom),
+            timestamp: moment(position.timestamp).format(
+              'dddd, MMMM Do YYYY, h:mm:ss a',
+            ),
+          };
+        });
       })
       .catch(error => {
         if (error.response) {
@@ -92,22 +113,25 @@ class App extends Component {
       });
   };
 
+  reportCurrentPosition = () => {
+    Geolocation.getCurrentPosition(
+      position => {
+        reportPosition(position, this.state.userId);
+      },
+      error => Alert.alert('Error', JSON.stringify(error)),
+      {enableHighAccuracy: true, timeout: 20000, maximumAge: 1000},
+    );
+  };
+
   startGeoPolling = () => {
     if (!this.state.intervalId) {
+      this.reportCurrentPosition();
       const geoInterval = setInterval(
-        () =>
-          Geolocation.getCurrentPosition(
-            position => {
-              reportPosition(position, this.state.userId);
-            },
-            error => Alert.alert('Error', JSON.stringify(error)),
-            {enableHighAccuracy: true, timeout: 20000, maximumAge: 1000},
-          ),
-        5000,
+        () => this.reportCurrentPosition(),
+        900000,
       );
       this.setState({intervalId: geoInterval});
     } else {
-      console.log(`GeoPolling already active: ${this.state.intervalId}`);
     }
   };
 
@@ -117,13 +141,17 @@ class App extends Component {
         <MapView
           provider={PROVIDER_GOOGLE} // remove if not using Google Maps
           style={styles.map}
-          region={{
-            latitude: 37.78825,
-            longitude: -122.4324,
-            latitudeDelta: 0.015,
-            longitudeDelta: 0.0121,
-          }}
-        />
+          showsMyLocationButton={true}>
+          {this.state.locations.map(loc => {
+            return (
+              <Polygon
+                coordinates={loc.coordinates}
+                tappable={true}
+                onPress={() => showDetails(loc.timestamp)}
+              />
+            );
+          })}
+        </MapView>
         <View style={styles.buttonPanel}>
           <TouchableOpacity
             style={styles.button}
