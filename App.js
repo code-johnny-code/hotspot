@@ -74,15 +74,17 @@ class App extends Component {
       locations: [],
       startingLoc: {latitude: 38.627003, longitude: -90.199402},
       userStatus: 'clear',
+      activeHotspots: [],
     };
   }
 
   componentDidMount() {
     this.setInitialMapLocation();
-    this.getSetUserId().then(() => {
+    this.getSetUserIdandStatus().then(() => {
       this.startGeoPolling();
       this.getMyPositionHistory().then(res => this.setState({locations: res}));
     });
+    this.getActiveHotspots();
   }
 
   positiveReportChickenTest = () => {
@@ -92,7 +94,25 @@ class App extends Component {
       [
         {
           text: 'Confirm',
-          onPress: () => this.reportPositiveCovidTestResult(this.state.userId),
+          onPress: () => this.reportPositiveCovidTestResult(),
+        },
+        {
+          text: 'Cancel',
+          onPress: () => console.log('Cancel Pressed'),
+          style: 'cancel',
+        },
+      ],
+    );
+  };
+
+  negativeReportChickenTest = () => {
+    Alert.alert(
+      'Revoke your Positive COVID-19 Result?',
+      'This will revoke your earlier report of testing positive and may remove hotspots from the system. \n\n Did you in fact receive a Negative result from a COVID-19 Test?',
+      [
+        {
+          text: 'Confirm',
+          onPress: () => this.negatePositiveTestResult(),
         },
         {
           text: 'Cancel',
@@ -110,7 +130,21 @@ class App extends Component {
       timestamp: moment().valueOf(),
     };
     axios.post(Config.API_REPORT_POSITIVE, payload).then(() => {
+      this.getActiveHotspots();
       this.setState({userStatus: 'positive'});
+      storeData('@HOTSPOT_STATUS', 'positive');
+    });
+  };
+
+  negatePositiveTestResult = () => {
+    const payload = {
+      userId: this.state.userId,
+      key: Config.API_KEY,
+    };
+    axios.post(Config.API_REPORT_NEGATIVE, payload).then(() => {
+      this.getActiveHotspots();
+      this.setState({userStatus: 'clear'});
+      storeData('@HOTSPOT_STATUS', 'clear');
     });
   };
 
@@ -123,17 +157,24 @@ class App extends Component {
         });
       },
       () => {
+        this.setState({
+          startingLoc: {latitude: 38.627003, longitude: -90.199402},
+        });
         Alert.alert('Location Error', 'Unable to determine current location');
       },
       {enableHighAccuracy: true, timeout: 20000, maximumAge: 10000},
     );
   };
 
-  getSetUserId = async () => {
+  getSetUserIdandStatus = async () => {
     try {
-      const value = await AsyncStorage.getItem('@HOTSPOT_USERID');
-      if (value !== null) {
-        return this.setState({userId: value});
+      const storedUserId = await AsyncStorage.getItem('@HOTSPOT_USERID');
+      const storedUserStatus = await AsyncStorage.getItem('@HOTSPOT_STATUS');
+      if (storedUserStatus !== null) {
+        this.setState({userStatus: storedUserStatus});
+      }
+      if (storedUserId !== null) {
+        return this.setState({userId: storedUserId});
       }
       const userId = uuidv4();
       const deviceId = getUniqueId();
@@ -146,6 +187,7 @@ class App extends Component {
         if (Object.keys(res.data).length) {
           this.setState({userId: userId});
           storeData('@HOTSPOT_USERID', userId);
+          this.reportCurrentPosition();
         }
       });
     } catch (e) {
@@ -178,14 +220,30 @@ class App extends Component {
       });
   };
 
+  getActiveHotspots = () => {
+    const payload = {
+      key: Config.API_KEY,
+    };
+    axios.get(Config.API_HOTSPOTS_URL, payload).then(res => {
+      const hotspots = res.data.map(spot => {
+        return {
+          coordinates: coordsToMapPolygonFormat(spot.geometry),
+          timestamp: spot.timestamp,
+        };
+      });
+      this.setState({activeHotspots: hotspots});
+    });
+  };
+
   reportCurrentPosition = () => {
     if (this.state.userId) {
       Geolocation.getCurrentPosition(
         position => {
           reportPosition(position, this.state.userId).then(() => {
-            this.getMyPositionHistory().then(res =>
-              this.setState({locations: res}),
-            );
+            this.getMyPositionHistory().then(res => {
+              this.getActiveHotspots();
+              this.setState({locations: res});
+            });
           });
         },
         error => Alert.alert('Error', JSON.stringify(error)),
@@ -266,6 +324,11 @@ class App extends Component {
               />
             );
           })}
+          {this.state.activeHotspots.map(loc => {
+            return (
+              <Polygon coordinates={loc.coordinates} fillColor={'#FF0000'} />
+            );
+          })}
         </MapView>
         <View style={styles.buttonPanel}>
           {this.state.userStatus === 'positive' ? null : (
@@ -280,7 +343,8 @@ class App extends Component {
               ...styles.statusButton,
               backgroundColor: this.userStatusColor(),
             }}
-            onPress={() => showDetails(this.userStatusText())}>
+            onPress={() => showDetails(this.userStatusText())}
+            onLongPress={() => this.negativeReportChickenTest()}>
             <Icon name={this.userStatusIcon()} size={40} color="white" />
           </TouchableOpacity>
         </View>
