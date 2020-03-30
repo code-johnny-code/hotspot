@@ -72,7 +72,7 @@ class App extends Component {
       userId: '54231ae2-2f41-4fbc-bf19-849b3e355baf',
       intervalId: null,
       locations: [],
-      startingLoc: {latitude: 38.627003, longitude: -90.199402},
+      startingLoc: {},
       userStatus: 'clear',
       activeHotspots: [],
     };
@@ -233,12 +233,17 @@ class App extends Component {
         };
       });
       const positionHistoryH3s = this.state.locations.map(loc => loc.h3);
-      hotspots.forEach(spot => {
-        if (positionHistoryH3s.includes(spot.h3)) {
-          this.setState({userStatus: 'exposed'});
-          storeData('@HOTSPOT_STATUS', 'exposed');
+      const exposureH3s = hotspots
+        .map(spot => spot.h3)
+        .filter(spot_h3 => positionHistoryH3s.includes(spot_h3));
+      if (exposureH3s.length) {
+        this.setState({userStatus: 'exposed'});
+      } else {
+        if (this.state.userStatus !== 'positive') {
+          this.setState({userStatus: 'clear'});
+          storeData('@HOTSPOT_STATUS', 'clear');
         }
-      });
+      }
       this.setState({activeHotspots: hotspots});
     });
   };
@@ -308,36 +313,49 @@ class App extends Component {
     }
   };
 
+  getCellColor = id => {
+    const locationCells = this.state.locations.map(loc => loc.h3);
+    if (locationCells.includes(id)) {
+      return '#FF0000';
+    }
+    return '#FFA500';
+  };
+
   render() {
     return (
       <SafeAreaView style={styles.container}>
-        <MapView
-          provider={PROVIDER_GOOGLE} // remove if not using Google Maps
-          style={styles.map}
-          showsUserLocation={true}
-          showsMyLocationButton={true}
-          initialRegion={{
-            latitude: this.state.startingLoc.latitude,
-            longitude: this.state.startingLoc.longitude,
-            latitudeDelta: 0.015,
-            longitudeDelta: 0.0121,
-          }}>
-          {this.state.locations.map(loc => {
-            return (
-              <Polygon
-                key={loc.timestamp + this.state.userId}
-                coordinates={loc.coordinates}
-                tappable={true}
-                onPress={() => showDetails(loc.timestamp)}
-              />
-            );
-          })}
-          {this.state.activeHotspots.map(loc => {
-            return (
-              <Polygon coordinates={loc.coordinates} fillColor={'#FF0000'} />
-            );
-          })}
-        </MapView>
+        {Object.keys(this.state.startingLoc).length ? (
+          <MapView
+            provider={PROVIDER_GOOGLE} // remove if not using Google Maps
+            style={styles.map}
+            showsUserLocation={true}
+            showsMyLocationButton={true}
+            initialRegion={{
+              latitude: this.state.startingLoc.latitude,
+              longitude: this.state.startingLoc.longitude,
+              latitudeDelta: 0.015,
+              longitudeDelta: 0.0121,
+            }}>
+            {this.state.locations.map(loc => {
+              return (
+                <Polygon
+                  key={loc.timestamp + this.state.userId}
+                  coordinates={loc.coordinates}
+                  tappable={true}
+                  onPress={() => showDetails(loc.timestamp)}
+                />
+              );
+            })}
+            {this.state.activeHotspots.map(loc => {
+              return (
+                <Polygon
+                  coordinates={loc.coordinates}
+                  fillColor={this.getCellColor(loc.h3)}
+                />
+              );
+            })}
+          </MapView>
+        ) : null}
         <View style={styles.buttonPanel}>
           {this.state.userStatus === 'positive' ? null : (
             <TouchableOpacity
